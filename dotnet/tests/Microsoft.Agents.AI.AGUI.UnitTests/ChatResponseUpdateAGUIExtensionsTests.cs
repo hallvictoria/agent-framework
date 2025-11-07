@@ -369,4 +369,153 @@ public sealed class ChatResponseUpdateAGUIExtensionsTests
         Assert.Equal("call_2", functionCalls[1].CallId);
         Assert.Equal("Tool2", functionCalls[1].Name);
     }
+
+    [Fact]
+    public async Task AsChatResponseUpdatesAsync_ConvertsStateSnapshotEvent_ToDataContentWithJsonAsync()
+    {
+        // Arrange
+        JsonElement stateSnapshot = JsonSerializer.SerializeToElement(new { counter = 42, status = "active" });
+        List<BaseEvent> events =
+        [
+            new RunStartedEvent { ThreadId = "thread1", RunId = "run1" },
+            new StateSnapshotEvent { Snapshot = stateSnapshot },
+            new RunFinishedEvent { ThreadId = "thread1", RunId = "run1" }
+        ];
+
+        // Act
+        List<ChatResponseUpdate> updates = [];
+        await foreach (ChatResponseUpdate update in events.ToAsyncEnumerableAsync().AsChatResponseUpdatesAsync(AGUIJsonSerializerContext.Default.Options))
+        {
+            updates.Add(update);
+        }
+
+        // Assert
+        ChatResponseUpdate stateUpdate = updates.First(u => u.Contents.Any(c => c is DataContent));
+        Assert.Equal(ChatRole.Assistant, stateUpdate.Role);
+        Assert.Equal("thread1", stateUpdate.ConversationId);
+        Assert.Equal("run1", stateUpdate.ResponseId);
+
+        DataContent dataContent = Assert.IsType<DataContent>(stateUpdate.Contents[0]);
+        Assert.Equal("application/json", dataContent.MediaType);
+
+        // Verify the JSON content
+        string jsonText = System.Text.Encoding.UTF8.GetString(dataContent.Data.ToArray());
+        JsonElement deserializedState = JsonSerializer.Deserialize<JsonElement>(jsonText);
+        Assert.Equal(42, deserializedState.GetProperty("counter").GetInt32());
+        Assert.Equal("active", deserializedState.GetProperty("status").GetString());
+
+        // Verify additional properties
+        Assert.NotNull(stateUpdate.AdditionalProperties);
+        Assert.True((bool)stateUpdate.AdditionalProperties["is_state_snapshot"]!);
+    }
+
+    [Fact]
+    public async Task AsChatResponseUpdatesAsync_WithNullStateSnapshot_DoesNotEmitUpdateAsync()
+    {
+        // Arrange
+        List<BaseEvent> events =
+        [
+            new RunStartedEvent { ThreadId = "thread1", RunId = "run1" },
+            new StateSnapshotEvent { Snapshot = null },
+            new RunFinishedEvent { ThreadId = "thread1", RunId = "run1" }
+        ];
+
+        // Act
+        List<ChatResponseUpdate> updates = [];
+        await foreach (ChatResponseUpdate update in events.ToAsyncEnumerableAsync().AsChatResponseUpdatesAsync(AGUIJsonSerializerContext.Default.Options))
+        {
+            updates.Add(update);
+        }
+
+        // Assert
+        Assert.DoesNotContain(updates, u => u.Contents.Any(c => c is DataContent));
+    }
+
+    [Fact]
+    public async Task AsChatResponseUpdatesAsync_WithEmptyObjectStateSnapshot_EmitsDataContentAsync()
+    {
+        // Arrange
+        JsonElement emptyState = JsonSerializer.SerializeToElement(new { });
+        List<BaseEvent> events =
+        [
+            new RunStartedEvent { ThreadId = "thread1", RunId = "run1" },
+            new StateSnapshotEvent { Snapshot = emptyState },
+            new RunFinishedEvent { ThreadId = "thread1", RunId = "run1" }
+        ];
+
+        // Act
+        List<ChatResponseUpdate> updates = [];
+        await foreach (ChatResponseUpdate update in events.ToAsyncEnumerableAsync().AsChatResponseUpdatesAsync(AGUIJsonSerializerContext.Default.Options))
+        {
+            updates.Add(update);
+        }
+
+        // Assert
+        ChatResponseUpdate stateUpdate = updates.First(u => u.Contents.Any(c => c is DataContent));
+        DataContent dataContent = Assert.IsType<DataContent>(stateUpdate.Contents[0]);
+        string jsonText = System.Text.Encoding.UTF8.GetString(dataContent.Data.ToArray());
+        Assert.Equal("{}", jsonText);
+    }
+
+    [Fact]
+    public async Task AsChatResponseUpdatesAsync_WithComplexStateSnapshot_PreservesJsonStructureAsync()
+    {
+        // Arrange
+        var complexState = new
+        {
+            user = new { name = "Alice", age = 30 },
+            items = new[] { "item1", "item2", "item3" },
+            metadata = new { timestamp = "2024-01-01T00:00:00Z", version = 2 }
+        };
+        JsonElement stateSnapshot = JsonSerializer.SerializeToElement(complexState);
+        List<BaseEvent> events =
+        [
+            new StateSnapshotEvent { Snapshot = stateSnapshot }
+        ];
+
+        // Act
+        List<ChatResponseUpdate> updates = [];
+        await foreach (ChatResponseUpdate update in events.ToAsyncEnumerableAsync().AsChatResponseUpdatesAsync(AGUIJsonSerializerContext.Default.Options))
+        {
+            updates.Add(update);
+        }
+
+        // Assert
+        ChatResponseUpdate stateUpdate = updates.First();
+        DataContent dataContent = Assert.IsType<DataContent>(stateUpdate.Contents[0]);
+        string jsonText = System.Text.Encoding.UTF8.GetString(dataContent.Data.ToArray());
+        JsonElement roundTrippedState = JsonSerializer.Deserialize<JsonElement>(jsonText);
+
+        Assert.Equal("Alice", roundTrippedState.GetProperty("user").GetProperty("name").GetString());
+        Assert.Equal(30, roundTrippedState.GetProperty("user").GetProperty("age").GetInt32());
+        Assert.Equal(3, roundTrippedState.GetProperty("items").GetArrayLength());
+        Assert.Equal("item1", roundTrippedState.GetProperty("items")[0].GetString());
+    }
+
+    [Fact]
+    public async Task AsChatResponseUpdatesAsync_WithStateSnapshotAndTextMessages_EmitsBothAsync()
+    {
+        // Arrange
+        JsonElement state = JsonSerializer.SerializeToElement(new { step = 1 });
+        List<BaseEvent> events =
+        [
+            new RunStartedEvent { ThreadId = "thread1", RunId = "run1" },
+            new TextMessageStartEvent { MessageId = "msg1", Role = AGUIRoles.Assistant },
+            new TextMessageContentEvent { MessageId = "msg1", Delta = "Processing..." },
+            new TextMessageEndEvent { MessageId = "msg1" },
+            new StateSnapshotEvent { Snapshot = state },
+            new RunFinishedEvent { ThreadId = "thread1", RunId = "run1" }
+        ];
+
+        // Act
+        List<ChatResponseUpdate> updates = [];
+        await foreach (ChatResponseUpdate update in events.ToAsyncEnumerableAsync().AsChatResponseUpdatesAsync(AGUIJsonSerializerContext.Default.Options))
+        {
+            updates.Add(update);
+        }
+
+        // Assert
+        Assert.Contains(updates, u => u.Contents.Any(c => c is TextContent));
+        Assert.Contains(updates, u => u.Contents.Any(c => c is DataContent));
+    }
 }

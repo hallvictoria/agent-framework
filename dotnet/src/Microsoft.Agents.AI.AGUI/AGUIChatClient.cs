@@ -199,6 +199,9 @@ public sealed class AGUIChatClient : DelegatingChatClient
             var threadId = ExtractTemporaryThreadId(messagesList) ??
                 ExtractThreadIdFromOptions(options) ?? $"thread_{Guid.NewGuid():N}";
 
+            // Extract state from the last message if it contains DataContent with application/json
+            JsonElement state = this.ExtractAndRemoveStateFromMessages(messagesList);
+
             // Create the input for the AGUI service
             var input = new RunAgentInput
             {
@@ -207,6 +210,7 @@ public sealed class AGUIChatClient : DelegatingChatClient
                 ThreadId = threadId,
                 RunId = runId,
                 Messages = messagesList.AsAGUIMessages(this._jsonSerializerOptions),
+                State = state,
             };
 
             // Add tools if provided
@@ -298,6 +302,43 @@ public sealed class AGUIChatClient : DelegatingChatClient
             }
 
             return threadId;
+        }
+
+        // Extract state from the last message's DataContent with application/json media type
+        // and remove that message from the list
+        private JsonElement ExtractAndRemoveStateFromMessages(List<ChatMessage> messagesList)
+        {
+            if (messagesList.Count == 0)
+            {
+                return default;
+            }
+
+            // Check the last message for state DataContent
+            var lastMessage = messagesList[messagesList.Count - 1];
+            for (int i = 0; i < lastMessage.Contents.Count; i++)
+            {
+                if (lastMessage.Contents[i] is DataContent dataContent &&
+                    string.Equals(dataContent.MediaType, "application/json", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Extract the state JSON
+                    string jsonText = System.Text.Encoding.UTF8.GetString(dataContent.Data.ToArray());
+                    try
+                    {
+                        JsonElement stateElement = (JsonElement)JsonSerializer.Deserialize(
+                            jsonText,
+                            this._jsonSerializerOptions.GetTypeInfo(typeof(JsonElement)))!;
+                        // Remove the state message from the list
+                        messagesList.RemoveAt(messagesList.Count - 1);
+                        return stateElement;
+                    }
+                    catch (JsonException ex)
+                    {
+                        throw new InvalidOperationException($"Failed to deserialize state JSON from DataContent: {ex.Message}", ex);
+                    }
+                }
+            }
+
+            return default;
         }
 
         public void Dispose()

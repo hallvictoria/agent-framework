@@ -70,8 +70,37 @@ internal static class ChatResponseUpdateAGUIExtensions
                 case ToolCallResultEvent toolCallResult:
                     yield return toolCallAccumulator.EmitToolCallResult(toolCallResult, jsonSerializerOptions);
                     break;
+
+                // State snapshot events
+                case StateSnapshotEvent stateSnapshot:
+                    if (stateSnapshot.Snapshot.HasValue)
+                    {
+                        yield return CreateStateSnapshotUpdate(stateSnapshot, conversationId, responseId);
+                    }
+                    break;
             }
         }
+    }
+
+    private static ChatResponseUpdate CreateStateSnapshotUpdate(
+        StateSnapshotEvent stateSnapshot,
+        string? conversationId,
+        string? responseId)
+    {
+        string jsonText = stateSnapshot.Snapshot!.Value.GetRawText();
+        byte[] jsonBytes = Encoding.UTF8.GetBytes(jsonText);
+        var dataContent = new DataContent(jsonBytes, "application/json");
+
+        return new ChatResponseUpdate(ChatRole.Assistant, [dataContent])
+        {
+            ConversationId = conversationId,
+            ResponseId = responseId,
+            CreatedAt = DateTimeOffset.UtcNow,
+            AdditionalProperties = new AdditionalPropertiesDictionary
+            {
+                ["is_state_snapshot"] = true
+            }
+        };
     }
 
     private sealed class TextMessageBuilder()
