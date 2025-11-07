@@ -1,5 +1,6 @@
 ﻿// Copyright (c) Microsoft. All rights reserved.
 
+using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
@@ -53,7 +54,11 @@ public static class AGUIEndpointRouteBuilderExtensions
             var baseOptions = CreateBaseAgentRunOptions(clientTools);
 
             IAsyncEnumerable<BaseEvent>? events = null;
-            var hasState = !input.State.Equals(default);
+            var stateKind = input.State.ValueKind;
+            var hasState = stateKind != JsonValueKind.Undefined && stateKind != JsonValueKind.Null &&
+              !((stateKind == JsonValueKind.Object && input.State.GetPropertyCount() == 0) ||
+              (stateKind == JsonValueKind.Array && input.State.GetArrayLength() == 0) ||
+              (stateKind == JsonValueKind.String && input.State.GetString()?.Length == 0));
             if (hasState)
             {
                 events = RunWithStateAsync(agent, baseOptions, messages, clientTools, input, jsonSerializerOptions, cancellationToken);
@@ -116,13 +121,14 @@ public static class AGUIEndpointRouteBuilderExtensions
             runWithStateOptions.ChatOptions!.ResponseFormat = ChatResponseFormat.Json;
         }
 
-        messages = messages.Append(new ChatMessage(
+        ChatMessage stateUpdateMessage = new(
             ChatRole.System,
             [
                 new TextContent("Here is the current state in JSON format:"),
-                        new TextContent(input.State.GetRawText()),
-                        new TextContent("The new state is:")
-            ]));
+                new TextContent(input.State.GetRawText()),
+                new TextContent("The new state is:")
+            ]);
+        messages = messages.Append(stateUpdateMessage);
 
         // We are going to coolect the chat response updates to generate a new list of messages
         // that we are going to pass on the second run.
