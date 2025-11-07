@@ -360,7 +360,6 @@ public sealed class SharedStateTests : IAsyncDisposable
 internal sealed class FakeStateChatClient : IChatClient
 {
     private readonly ITestOutputHelper? _output;
-    private readonly List<CallInfo> _receivedCalls = [];
 
     public FakeStateChatClient(ITestOutputHelper? output = null)
     {
@@ -369,7 +368,7 @@ internal sealed class FakeStateChatClient : IChatClient
 
     public ChatClientMetadata Metadata => new("fake-state-chat-client");
 
-    public List<CallInfo> ReceivedCalls => this._receivedCalls;
+    public List<CallInfo> ReceivedCalls { get; } = [];
 
     public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
         IEnumerable<ChatMessage> messages,
@@ -380,7 +379,7 @@ internal sealed class FakeStateChatClient : IChatClient
         this._output?.WriteLine($"[FakeStateChatClient] Received {messageList.Count} messages");
 
         // Track this call
-        this._receivedCalls.Add(new CallInfo(messageList, options));
+        this.ReceivedCalls.Add(new CallInfo(messageList, options));
 
         // Log messages for debugging
         foreach (ChatMessage msg in messageList)
