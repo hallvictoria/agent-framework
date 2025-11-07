@@ -314,21 +314,28 @@ public sealed class AGUIChatClient : DelegatingChatClient
             }
 
             // Check the last message for state DataContent
-            var lastMessage = messagesList[messagesList.Count - 1];
+            ChatMessage lastMessage = messagesList[messagesList.Count - 1];
             for (int i = 0; i < lastMessage.Contents.Count; i++)
             {
                 if (lastMessage.Contents[i] is DataContent dataContent &&
                     string.Equals(dataContent.MediaType, "application/json", StringComparison.OrdinalIgnoreCase))
                 {
-                    // Extract the state JSON
-                    string jsonText = System.Text.Encoding.UTF8.GetString(dataContent.Data.ToArray());
+                    // Deserialize the state JSON directly from UTF-8 bytes
                     try
                     {
                         JsonElement stateElement = (JsonElement)JsonSerializer.Deserialize(
-                            jsonText,
+                            dataContent.Data.Span,
                             this._jsonSerializerOptions.GetTypeInfo(typeof(JsonElement)))!;
-                        // Remove the state message from the list
-                        messagesList.RemoveAt(messagesList.Count - 1);
+
+                        // Remove the DataContent from the message contents
+                        lastMessage.Contents.RemoveAt(i);
+
+                        // If no contents remain, remove the entire message
+                        if (lastMessage.Contents.Count == 0)
+                        {
+                            messagesList.RemoveAt(messagesList.Count - 1);
+                        }
+
                         return stateElement;
                     }
                     catch (JsonException ex)
