@@ -74,7 +74,7 @@ internal static class ChatResponseUpdateAGUIExtensions
         }
     }
 
-    private class TextMessageBuilder()
+    private sealed class TextMessageBuilder()
     {
         private ChatRole _currentRole;
         private string? _currentMessageId;
@@ -154,7 +154,7 @@ internal static class ChatResponseUpdateAGUIExtensions
         };
     }
 
-    private class ToolCallBuilder
+    private sealed class ToolCallBuilder
     {
         private string? _conversationId;
         private string? _responseId;

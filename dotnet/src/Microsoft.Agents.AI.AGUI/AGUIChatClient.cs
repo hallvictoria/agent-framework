@@ -316,7 +316,7 @@ public sealed class AGUIChatClient : DelegatingChatClient
         }
     }
 
-    private class ServerFunctionCallContent(FunctionCallContent functionCall) : AIContent
+    private sealed class ServerFunctionCallContent(FunctionCallContent functionCall) : AIContent
     {
         public FunctionCallContent FunctionCallContent { get; } = functionCall;
     }
