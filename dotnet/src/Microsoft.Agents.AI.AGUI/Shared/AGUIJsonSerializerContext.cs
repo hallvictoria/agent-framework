@@ -44,6 +44,7 @@ namespace Microsoft.Agents.AI.AGUI;
 [JsonSerializable(typeof(ToolCallArgsEvent))]
 [JsonSerializable(typeof(ToolCallEndEvent))]
 [JsonSerializable(typeof(ToolCallResultEvent))]
+[JsonSerializable(typeof(StateSnapshotEvent))]
 [JsonSerializable(typeof(IDictionary<string, object?>))]
 [JsonSerializable(typeof(Dictionary<string, object?>))]
 [JsonSerializable(typeof(IDictionary<string, System.Text.Json.JsonElement?>))]

@@ -368,6 +368,67 @@ internal static class ChatResponseUpdateAGUIExtensions
         };
     }
 
+    internal static async IAsyncEnumerable<BaseEvent> AsAGUIStateUpdateStreamAsync(
+        this IAsyncEnumerable<BaseEvent> stateUpdateStream,
+        string threadId,
+        string runId,
+        JsonSerializerOptions options,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        BaseEvent? previousEvent = null;
+        var builder = new StringBuilder();
+        await foreach (var evt in stateUpdateStream.WithCancellation(cancellationToken).ConfigureAwait(false))
+        {
+            // For state updates, we will receive a stream of Text events representing the update in JSON format.
+            // We might receive tool calls as well. We will yield the run start and the tool calls.
+            // We will collect the contents of all the Text message events
+            // When we receive the text end, we will parse all the text into JSON and yield a single
+            // StateSnapshotEvent.
+            switch (evt)
+            {
+                case RunStartedEvent runStarted:
+                    yield return new RunStartedEvent
+                    {
+                        ThreadId = threadId,
+                        RunId = runId
+                    };
+                    break;
+                case TextMessageStartEvent:
+                    break;
+                case TextMessageContentEvent content:
+                    builder = builder.Append(content.Delta);
+                    previousEvent = evt;
+                    break;
+                case TextMessageEndEvent textEnd:
+                    // Yield StateSnapshotEvent
+                    yield return new StateSnapshotEvent
+                    {
+                        Snapshot = (JsonElement?)JsonSerializer.Deserialize(
+                            builder.ToString(),
+                            options.GetTypeInfo(typeof(JsonElement)))
+                    };
+                    previousEvent = null;
+                    break;
+                case RunFinishedEvent:
+                    if (previousEvent is RunErrorEvent)
+                    {
+                        // If we had a run error, return the finished event and stop.
+                        yield return evt;
+                        yield break;
+                    }
+                    break;
+                case RunErrorEvent:
+                    previousEvent = evt;
+                    yield return evt;
+                    break;
+                default:
+                    previousEvent = evt;
+                    yield return evt;
+                    break;
+            }
+        }
+    }
+
     private static string? SerializeResultContent(FunctionResultContent functionResultContent, JsonSerializerOptions options)
     {
         return functionResultContent.Result switch

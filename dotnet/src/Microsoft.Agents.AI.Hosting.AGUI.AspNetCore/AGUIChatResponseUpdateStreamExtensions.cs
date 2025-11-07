@@ -87,4 +87,16 @@ internal static class AGUIChatResponseUpdateStreamExtensions
             }
         }
     }
+
+    public static async IAsyncEnumerable<ChatResponseUpdate> CollectUpdatesAsync(
+        this IAsyncEnumerable<ChatResponseUpdate> updates,
+        List<ChatResponseUpdate> accumulator,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        await foreach (var update in updates.ConfigureAwait(false))
+        {
+            accumulator.Add(update);
+            yield return update;
+        }
+    }
 }
