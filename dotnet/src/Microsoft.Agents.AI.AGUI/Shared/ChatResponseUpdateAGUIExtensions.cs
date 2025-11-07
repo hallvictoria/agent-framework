@@ -1,6 +1,7 @@
 ﻿// Copyright (c) Microsoft. All rights reserved.
 
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
@@ -75,7 +76,7 @@ internal static class ChatResponseUpdateAGUIExtensions
                 case StateSnapshotEvent stateSnapshot:
                     if (stateSnapshot.Snapshot.HasValue)
                     {
-                        yield return CreateStateSnapshotUpdate(stateSnapshot, conversationId, responseId);
+                        yield return CreateStateSnapshotUpdate(stateSnapshot, conversationId, responseId, jsonSerializerOptions);
                     }
                     break;
             }
@@ -85,11 +86,14 @@ internal static class ChatResponseUpdateAGUIExtensions
     private static ChatResponseUpdate CreateStateSnapshotUpdate(
         StateSnapshotEvent stateSnapshot,
         string? conversationId,
-        string? responseId)
+        string? responseId,
+        JsonSerializerOptions jsonSerializerOptions)
     {
-        string jsonText = stateSnapshot.Snapshot!.Value.GetRawText();
-        byte[] jsonBytes = Encoding.UTF8.GetBytes(jsonText);
-        var dataContent = new DataContent(jsonBytes, "application/json");
+        // Serialize JsonElement directly to UTF-8 bytes using AOT-safe overload
+        byte[] jsonBytes = JsonSerializer.SerializeToUtf8Bytes(
+            stateSnapshot.Snapshot!.Value,
+            jsonSerializerOptions.GetTypeInfo(typeof(JsonElement)));
+        DataContent dataContent = new(jsonBytes, "application/json");
 
         return new ChatResponseUpdate(ChatRole.Assistant, [dataContent])
         {
@@ -421,21 +425,26 @@ internal static class ChatResponseUpdateAGUIExtensions
                         ThreadId = threadId,
                         RunId = runId
                     };
+                    builder.Clear();
                     break;
                 case TextMessageStartEvent:
+                    builder.Clear();
+                    previousEvent = evt;
                     break;
                 case TextMessageContentEvent content:
-                    builder = builder.Append(content.Delta);
+                    builder.Append(content.Delta);
                     previousEvent = evt;
                     break;
                 case TextMessageEndEvent textEnd:
                     // Yield StateSnapshotEvent
+                    string snapshotJson = builder.ToString();
                     yield return new StateSnapshotEvent
                     {
                         Snapshot = (JsonElement?)JsonSerializer.Deserialize(
-                            builder.ToString(),
+                            snapshotJson,
                             options.GetTypeInfo(typeof(JsonElement)))
                     };
+                    builder.Clear();
                     previousEvent = null;
                     break;
                 case RunFinishedEvent:
@@ -445,7 +454,9 @@ internal static class ChatResponseUpdateAGUIExtensions
                         yield return evt;
                         yield break;
                     }
-                    break;
+                    // Don't emit RunFinished for successful state updates -
+                    // this run gets stitched with the description run
+                    yield break;
                 case RunErrorEvent:
                     previousEvent = evt;
                     yield return evt;

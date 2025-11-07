@@ -518,4 +518,213 @@ public sealed class ChatResponseUpdateAGUIExtensionsTests
         Assert.Contains(updates, u => u.Contents.Any(c => c is TextContent));
         Assert.Contains(updates, u => u.Contents.Any(c => c is DataContent));
     }
+
+    [Fact]
+    public async Task AsAGUIStateUpdateStreamAsync_ConvertsTextMessagesToStateSnapshotAsync()
+    {
+        // Arrange
+        List<BaseEvent> stateUpdateEvents =
+        [
+            new RunStartedEvent { ThreadId = "orig_thread", RunId = "orig_run" },
+            new TextMessageStartEvent { MessageId = "msg1", Role = AGUIRoles.Assistant },
+            new TextMessageContentEvent { MessageId = "msg1", Delta = "{\"counter\"" },
+            new TextMessageContentEvent { MessageId = "msg1", Delta = ":5,\"active\"" },
+            new TextMessageContentEvent { MessageId = "msg1", Delta = ":true}" },
+            new TextMessageEndEvent { MessageId = "msg1" },
+            new RunFinishedEvent { ThreadId = "orig_thread", RunId = "orig_run" }
+        ];
+
+        // Act
+        List<BaseEvent> outputEvents = [];
+        await foreach (BaseEvent evt in stateUpdateEvents.ToAsyncEnumerableAsync().AsAGUIStateUpdateStreamAsync(
+            "new_thread", "new_run", AGUIJsonSerializerContext.Default.Options, default))
+        {
+            outputEvents.Add(evt);
+        }
+
+        // Assert
+        Assert.Equal(2, outputEvents.Count);
+
+        RunStartedEvent runStarted = Assert.IsType<RunStartedEvent>(outputEvents[0]);
+        Assert.Equal("new_thread", runStarted.ThreadId);
+        Assert.Equal("new_run", runStarted.RunId);
+
+        StateSnapshotEvent stateSnapshot = Assert.IsType<StateSnapshotEvent>(outputEvents[1]);
+        Assert.NotNull(stateSnapshot.Snapshot);
+        Assert.Equal(5, stateSnapshot.Snapshot!.Value.GetProperty("counter").GetInt32());
+        Assert.True(stateSnapshot.Snapshot!.Value.GetProperty("active").GetBoolean());
+
+        Assert.DoesNotContain(outputEvents, e => e is RunFinishedEvent);
+    }
+
+    [Fact]
+    public async Task AsAGUIStateUpdateStreamAsync_UsesProvidedThreadAndRunIds_NotOriginalAsync()
+    {
+        // Arrange
+        List<BaseEvent> events =
+        [
+            new RunStartedEvent { ThreadId = "original_thread", RunId = "original_run" },
+            new TextMessageStartEvent { MessageId = "msg1", Role = AGUIRoles.Assistant },
+            new TextMessageContentEvent { MessageId = "msg1", Delta = "{}" },
+            new TextMessageEndEvent { MessageId = "msg1" }
+        ];
+
+        // Act
+        List<BaseEvent> outputEvents = [];
+        await foreach (BaseEvent evt in events.ToAsyncEnumerableAsync().AsAGUIStateUpdateStreamAsync(
+            "custom_thread", "custom_run", AGUIJsonSerializerContext.Default.Options, default))
+        {
+            outputEvents.Add(evt);
+        }
+
+        // Assert
+        RunStartedEvent runStarted = Assert.IsType<RunStartedEvent>(outputEvents[0]);
+        Assert.Equal("custom_thread", runStarted.ThreadId);
+        Assert.Equal("custom_run", runStarted.RunId);
+    }
+
+    [Fact]
+    public async Task AsAGUIStateUpdateStreamAsync_WithToolCalls_YieldsToolCallEventsAsync()
+    {
+        // Arrange
+        List<BaseEvent> events =
+        [
+            new RunStartedEvent { ThreadId = "thread1", RunId = "run1" },
+            new ToolCallStartEvent { ToolCallId = "call_1", ToolCallName = "GetData", ParentMessageId = "msg1" },
+            new ToolCallArgsEvent { ToolCallId = "call_1", Delta = "{\"param\":\"value\"}" },
+            new ToolCallEndEvent { ToolCallId = "call_1" },
+            new TextMessageStartEvent { MessageId = "msg2", Role = AGUIRoles.Assistant },
+            new TextMessageContentEvent { MessageId = "msg2", Delta = "{\"result\":\"ok\"}" },
+            new TextMessageEndEvent { MessageId = "msg2" }
+        ];
+
+        // Act
+        List<BaseEvent> outputEvents = [];
+        await foreach (BaseEvent evt in events.ToAsyncEnumerableAsync().AsAGUIStateUpdateStreamAsync(
+            "thread1", "run1", AGUIJsonSerializerContext.Default.Options, default))
+        {
+            outputEvents.Add(evt);
+        }
+
+        // Assert
+        Assert.Contains(outputEvents, e => e is ToolCallStartEvent);
+        Assert.Contains(outputEvents, e => e is ToolCallArgsEvent);
+        Assert.Contains(outputEvents, e => e is ToolCallEndEvent);
+        Assert.Contains(outputEvents, e => e is StateSnapshotEvent);
+    }
+
+    [Fact]
+    public async Task AsAGUIStateUpdateStreamAsync_WithRunError_YieldsErrorAndFinishedAsync()
+    {
+        // Arrange
+        List<BaseEvent> events =
+        [
+            new RunStartedEvent { ThreadId = "thread1", RunId = "run1" },
+            new RunErrorEvent { Message = "Processing failed", Code = "ERR001" },
+            new RunFinishedEvent { ThreadId = "thread1", RunId = "run1" }
+        ];
+
+        // Act
+        List<BaseEvent> outputEvents = [];
+        await foreach (BaseEvent evt in events.ToAsyncEnumerableAsync().AsAGUIStateUpdateStreamAsync(
+            "thread1", "run1", AGUIJsonSerializerContext.Default.Options, default))
+        {
+            outputEvents.Add(evt);
+        }
+
+        // Assert
+        Assert.Equal(3, outputEvents.Count);
+        Assert.IsType<RunStartedEvent>(outputEvents[0]);
+
+        RunErrorEvent errorEvent = Assert.IsType<RunErrorEvent>(outputEvents[1]);
+        Assert.Equal("Processing failed", errorEvent.Message);
+        Assert.Equal("ERR001", errorEvent.Code);
+
+        Assert.IsType<RunFinishedEvent>(outputEvents[2]);
+    }
+
+    [Fact]
+    public async Task AsAGUIStateUpdateStreamAsync_WithErrorBeforeFinished_StopsAfterFinishedAsync()
+    {
+        // Arrange
+        List<BaseEvent> events =
+        [
+            new RunStartedEvent { ThreadId = "thread1", RunId = "run1" },
+            new TextMessageStartEvent { MessageId = "msg1", Role = AGUIRoles.Assistant },
+            new TextMessageContentEvent { MessageId = "msg1", Delta = "{\"data\":1}" },
+            new RunErrorEvent { Message = "Error", Code = "ERR" },
+            new RunFinishedEvent { ThreadId = "thread1", RunId = "run1" },
+            new TextMessageContentEvent { MessageId = "msg1", Delta = "more text" } // Should not be yielded
+        ];
+
+        // Act
+        List<BaseEvent> outputEvents = [];
+        await foreach (BaseEvent evt in events.ToAsyncEnumerableAsync().AsAGUIStateUpdateStreamAsync(
+            "thread1", "run1", AGUIJsonSerializerContext.Default.Options, default))
+        {
+            outputEvents.Add(evt);
+        }
+
+        // Assert
+        Assert.DoesNotContain(outputEvents, e => e is TextMessageContentEvent tce && tce.Delta == "more text");
+        Assert.Contains(outputEvents, e => e is RunFinishedEvent);
+    }
+
+    [Fact]
+    public async Task AsAGUIStateUpdateStreamAsync_AccumulatesMultipleTextChunks_IntoSingleJsonAsync()
+    {
+        // Arrange
+        List<BaseEvent> events =
+        [
+            new RunStartedEvent { ThreadId = "thread1", RunId = "run1" },
+            new TextMessageStartEvent { MessageId = "msg1", Role = AGUIRoles.Assistant },
+            new TextMessageContentEvent { MessageId = "msg1", Delta = "{" },
+            new TextMessageContentEvent { MessageId = "msg1", Delta = "\"name\"" },
+            new TextMessageContentEvent { MessageId = "msg1", Delta = ":" },
+            new TextMessageContentEvent { MessageId = "msg1", Delta = "\"test\"" },
+            new TextMessageContentEvent { MessageId = "msg1", Delta = ",\"value\":" },
+            new TextMessageContentEvent { MessageId = "msg1", Delta = "123" },
+            new TextMessageContentEvent { MessageId = "msg1", Delta = "}" },
+            new TextMessageEndEvent { MessageId = "msg1" }
+        ];
+
+        // Act
+        List<BaseEvent> outputEvents = [];
+        await foreach (BaseEvent evt in events.ToAsyncEnumerableAsync().AsAGUIStateUpdateStreamAsync(
+            "thread1", "run1", AGUIJsonSerializerContext.Default.Options, default))
+        {
+            outputEvents.Add(evt);
+        }
+
+        // Assert
+        StateSnapshotEvent stateSnapshot = outputEvents.OfType<StateSnapshotEvent>().Single();
+        Assert.Equal("test", stateSnapshot.Snapshot!.Value.GetProperty("name").GetString());
+        Assert.Equal(123, stateSnapshot.Snapshot!.Value.GetProperty("value").GetInt32());
+    }
+
+    [Fact]
+    public async Task AsAGUIStateUpdateStreamAsync_FiltersOutTextMessageStartEvent_DoesNotYieldItAsync()
+    {
+        // Arrange
+        List<BaseEvent> events =
+        [
+            new RunStartedEvent { ThreadId = "thread1", RunId = "run1" },
+            new TextMessageStartEvent { MessageId = "msg1", Role = AGUIRoles.Assistant },
+            new TextMessageContentEvent { MessageId = "msg1", Delta = "{}" },
+            new TextMessageEndEvent { MessageId = "msg1" }
+        ];
+
+        // Act
+        List<BaseEvent> outputEvents = [];
+        await foreach (BaseEvent evt in events.ToAsyncEnumerableAsync().AsAGUIStateUpdateStreamAsync(
+            "thread1", "run1", AGUIJsonSerializerContext.Default.Options, default))
+        {
+            outputEvents.Add(evt);
+        }
+
+        // Assert
+        Assert.DoesNotContain(outputEvents, e => e is TextMessageStartEvent);
+        Assert.DoesNotContain(outputEvents, e => e is TextMessageContentEvent);
+        Assert.DoesNotContain(outputEvents, e => e is TextMessageEndEvent);
+    }
 }
